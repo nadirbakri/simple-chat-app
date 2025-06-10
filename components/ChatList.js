@@ -53,7 +53,7 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
           <div className="p-4 text-center text-gray-500">
             <div className="text-4xl mb-2">💬</div>
             <p>Belum ada chat.</p>
-            <p className="text-sm">Klik "Tambah" untuk memulai.</p>
+            <p className="text-sm">Klik &quot;Tambah&quot; untuk memulai.</p>
           </div>
         ) : (
           chats.map((chat) => (
