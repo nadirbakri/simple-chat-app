@@ -3,30 +3,16 @@ import { Redis } from '@upstash/redis'
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
-  retry: false,
+  retry: {
+    retries: 3,
+    backoff: (retryCount) => Math.min(retryCount * 100, 1000)
+  },
   enableAutoPipelining: false,
 })
 
 const log = (msg, data = '') => {
   const timestamp = new Date().toISOString()
   console.log(`[${timestamp}] ${msg}`, data)
-}
-
-const testRedisConnection = async () => {
-  try {
-    const testKey = `test:${Date.now()}`
-    await redis.set(testKey, 'ping', { ex: 10 })
-    const result = await redis.get(testKey)
-    if (result === 'ping') {
-      log('✅ Redis connection test successful')
-      await redis.del(testKey)
-    } else {
-      log('❌ Redis connection test failed - unexpected result:', result)
-    }
-  } catch (error) {
-    log('❌ Redis connection test failed:', error.message)
-    throw error
-  }
 }
 
 const getUserKey = (userId) => `user:${userId}`
@@ -90,9 +76,6 @@ export default async function handler(req, res) {
       switch (action) {
         case 'register':
           try {
-            log(`🔄 [${requestId}] Testing Redis connection for registration`)
-            await testRedisConnection()
-            
             log(`🔄 [${requestId}] Registering user: ${userId}`)
             await redis.set(getUserKey(userId), Date.now(), { ex: 3600 })
             
@@ -169,6 +152,8 @@ export default async function handler(req, res) {
             await redis.sadd(`chats:${to}`, from)
             await redis.expire(`chats:${from}`, 3600)
             await redis.expire(`chats:${to}`, 3600)
+            
+            // Clear typing indicator when message is sent
             await redis.hdel(getTypingKey(chatId), from)
             
             log(`✅ [${requestId}] Message sent successfully`)
@@ -214,16 +199,32 @@ export default async function handler(req, res) {
             
             const chatId = getChatKey(userId, chatWith)
             const typingKey = getTypingKey(chatId)
+            const timestamp = Date.now()
+            
+            log(`⌨️ [${requestId}] Typing action: ${userId} → ${chatWith}, typing: ${isTyping}`)
+            log(`⌨️ [${requestId}] Chat ID: ${chatId}, Key: ${typingKey}`)
             
             if (isTyping) {
-              await redis.hset(typingKey, userId, Date.now())
-              await redis.expire(typingKey, 60)
+              // Set typing status with current timestamp
+              await redis.hset(typingKey, userId, timestamp)
+              await redis.expire(typingKey, 30) // 30 seconds expiry
+              log(`⌨️ [${requestId}] Set typing: ${userId} at ${timestamp}`)
             } else {
+              // Remove typing status
               await redis.hdel(typingKey, userId)
+              log(`⌨️ [${requestId}] Removed typing: ${userId}`)
             }
             
-            log(`⌨️ [${requestId}] Typing: ${userId} ${isTyping ? 'started' : 'stopped'}`)
-            return res.json({ success: true, message: 'Typing status updated', requestId })
+            // Debug: Check what's in Redis after setting
+            const debugTypingData = await redis.hgetall(typingKey)
+            log(`⌨️ [${requestId}] Debug - typing data after operation:`, debugTypingData)
+            
+            return res.json({ 
+              success: true, 
+              message: 'Typing status updated', 
+              debug: { chatId, typingKey, timestamp, debugTypingData },
+              requestId 
+            })
           } catch (error) {
             log(`❌ [${requestId}] Typing error:`, error.message)
             return res.status(500).json({ 
@@ -254,23 +255,42 @@ export default async function handler(req, res) {
       if (getTyping && chatWith) {
         try {
           const chatId = getChatKey(userId, chatWith)
-          const typingData = await redis.hgetall(getTypingKey(chatId)) || {}
+          const typingKey = getTypingKey(chatId)
+          
+          log(`⌨️ [${requestId}] Checking typing for chat: ${chatId}, key: ${typingKey}`)
+          
+          const typingData = await redis.hgetall(typingKey) || {}
+          log(`⌨️ [${requestId}] Raw typing data:`, typingData)
           
           const now = Date.now()
-          const fiveSecondsAgo = now - 5000
+          const fiveSecondsAgo = now - 5000 // 5 seconds tolerance
           
           const activeTypers = Object.entries(typingData)
-            .filter(([user, timestamp]) => 
-              user !== userId && parseInt(timestamp) > fiveSecondsAgo
-            )
+            .filter(([user, timestamp]) => {
+              const isNotSelf = user !== userId
+              const isRecent = parseInt(timestamp) > fiveSecondsAgo
+              
+              log(`⌨️ [${requestId}] Check user ${user}: notSelf=${isNotSelf}, recent=${isRecent}, timestamp=${timestamp}, now=${now}`)
+              
+              return isNotSelf && isRecent
+            })
             .map(([user, _]) => user)
           
-          const elapsed = Date.now() - startTime
-          log(`⌨️ [${requestId}] Typing check: ${activeTypers.length} active (${elapsed}ms)`)
+          const isTyping = activeTypers.length > 0
+          
+          log(`⌨️ [${requestId}] Final result: isTyping=${isTyping}, activeTypers=[${activeTypers.join(', ')}]`)
           
           return res.json({ 
-            isTyping: activeTypers.length > 0,
+            isTyping,
             typingUsers: activeTypers,
+            debug: { 
+              chatId, 
+              typingKey, 
+              typingData, 
+              now, 
+              fiveSecondsAgo, 
+              activeTypers 
+            },
             requestId 
           })
         } catch (error) {
@@ -331,9 +351,9 @@ export default async function handler(req, res) {
               setTimeout(() => reject(new Error('Chat timeout')), 8000)
             )
             
-            const [latestMessages, lastSeenTime] = await Promise.race([
+            const [messagesData, lastSeenTime] = await Promise.race([
               Promise.all([
-                redis.lrange(getMessagesKey(chatId), 0, 0),
+                redis.lrange(getMessagesKey(chatId), 0, 20),
                 redis.get(getLastSeenKey(userId, chatUserId))
               ]),
               timeoutPromise
@@ -343,22 +363,27 @@ export default async function handler(req, res) {
             let lastMessageTime = null
             let unreadCount = 0
             
-            if (latestMessages && latestMessages.length > 0 && latestMessages[0].length > 0) {
-              const messageObj = safeParse(latestMessages[0])
-              if (messageObj && messageObj.message) {
-                lastMessage = messageObj.message
-                lastMessageTime = messageObj.timestamp
-                
-                const lastSeen = parseInt(lastSeenTime || 0)
-                const messageTime = new Date(messageObj.timestamp).getTime()
-                
-                if (messageObj.from !== userId && messageTime > lastSeen) {
-                  unreadCount = 1
+            if (messagesData && messagesData.length > 0) {
+              const latestMsg = safeParse(messagesData[0])
+              if (latestMsg && latestMsg.message) {
+                lastMessage = latestMsg.message
+                lastMessageTime = latestMsg.timestamp
+              }
+              
+              const lastSeen = parseInt(lastSeenTime || 0)
+              
+              for (const msgStr of messagesData) {
+                const msg = safeParse(msgStr)
+                if (msg && msg.from !== userId && msg.id) {
+                  const msgTime = parseInt(msg.id)
+                  if (msgTime > lastSeen) {
+                    unreadCount++
+                  }
                 }
               }
             }
             
-            log(`✅ [${requestId}] Chat ${index + 1} processed: ${chatUserId}`)
+            log(`✅ [${requestId}] Chat ${index + 1} processed: ${chatUserId}, unread: ${unreadCount}`)
             
             return {
               id: chatUserId,

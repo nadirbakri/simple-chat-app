@@ -30,7 +30,7 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
   }
 
   return (
-    <div className="w-1/3 bg-gray-100 border-r border-gray-300">
+    <div className="w-1/3 bg-gray-100 border-r border-gray-300 flex flex-col">
       <div className="p-4 bg-white border-b border-gray-300">
         <div className="flex justify-between items-center">
           <div className="flex items-center space-x-2">
@@ -48,7 +48,7 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
         </div>
       </div>
       
-      <div className="overflow-y-auto h-full">
+      <div className="overflow-y-auto flex-1">
         {chats.length === 0 ? (
           <div className="p-4 text-center text-gray-500">
             <div className="text-4xl mb-2">💬</div>
@@ -61,20 +61,20 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
               key={chat.id}
               onClick={() => onChatSelect(chat)}
               className={`
-                p-4 border-b border-gray-200 cursor-pointer transition duration-200
+                p-4 border-b cursor-pointer transition-all duration-200
                 ${currentChat?.id === chat.id 
-                  ? 'bg-blue-50 border-blue-200' 
+                  ? 'bg-blue-50 border-l-4 border-l-blue-500' 
                   : chat.hasUnread 
-                    ? 'bg-yellow-50 hover:bg-yellow-100 border-yellow-200' 
-                    : 'hover:bg-gray-50'
+                    ? 'bg-yellow-50 hover:bg-yellow-100 border-yellow-200 animate-pulse' 
+                    : 'hover:bg-gray-50 border-gray-200'
                 }
               `}
             >
               <div className="flex items-center">
                 <div className={`
-                  w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold mr-3
+                  w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold mr-3 transition-all duration-300
                   ${chat.hasUnread 
-                    ? 'bg-gradient-to-r from-red-500 to-pink-500' 
+                    ? 'bg-gradient-to-r from-red-500 to-pink-500 shadow-lg transform scale-110' 
                     : 'bg-gradient-to-r from-blue-500 to-purple-600'
                   }
                 `}>
@@ -83,18 +83,18 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start">
                     <h3 className={`
-                      font-medium truncate
-                      ${chat.hasUnread ? 'text-gray-900' : 'text-gray-800'}
+                      font-medium truncate pr-2
+                      ${chat.hasUnread ? 'text-gray-900 font-bold' : 'text-gray-800'}
                     `}>
                       {chat.name}
                     </h3>
-                    <div className="flex items-center space-x-2 ml-2">
+                    <div className="flex items-center space-x-1 flex-shrink-0">
                       {chat.lastMessageTime && isClient && (
-                        <span className="text-xs text-gray-500">
+                        <span className={`text-xs ${chat.hasUnread ? 'text-yellow-700 font-semibold' : 'text-gray-500'}`}>
                           {formatLastMessageTime(chat.lastMessageTime)}
                         </span>
                       )}
-                      {chat.hasUnread && (
+                      {chat.hasUnread && chat.unreadCount > 0 && (
                         <UnreadBadge count={chat.unreadCount} size="small" />
                       )}
                     </div>
@@ -102,7 +102,7 @@ export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }
                   <p className={`
                     text-sm truncate mt-1
                     ${chat.hasUnread 
-                      ? 'text-gray-700 font-medium' 
+                      ? 'text-gray-700 font-semibold' 
                       : 'text-gray-500'
                     }
                   `}>

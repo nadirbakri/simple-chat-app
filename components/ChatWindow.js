@@ -1,11 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
+import { chatAPI } from '../lib/api'
 
 export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead, currentUserId }) {
   const [message, setMessage] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const [otherUserTyping, setOtherUserTyping] = useState(false)
   const [typingTimeout, setTypingTimeout] = useState(null)
+  const [sendingMessage, setSendingMessage] = useState(false)
+  const [lastTypingCheck, setLastTypingCheck] = useState(0)
   const messagesEndRef = useRef(null)
+  const typingCheckIntervalRef = useRef(null)
+  const typingDebounceRef = useRef(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -19,56 +24,65 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
     if (!chat || !currentUserId) return
     
     try {
-      console.log(`🔍 Checking typing status for: ${currentUserId} with ${chat.id}`)
+      const now = Date.now()
+      console.log(`⌨️ Checking typing status for ${chat.id} at ${new Date(now).toLocaleTimeString()}`)
       
-      const response = await fetch(`/api/chat?getTyping=true&userId=${currentUserId}&chatWith=${chat.id}`)
-      const data = await response.json()
+      const data = await chatAPI.getTypingStatus(currentUserId, chat.id)
       
-      console.log(`📡 Typing response:`, data)
+      console.log(`⌨️ Typing response:`, {
+        isTyping: data.isTyping,
+        typingUsers: data.typingUsers,
+        debug: data.debug
+      })
       
       if (data.isTyping && data.typingUsers?.length > 0) {
-        console.log(`⌨️ ${data.typingUsers[0]} is typing!`)
+        console.log(`⌨️ ${data.typingUsers[0]} is typing to ${currentUserId}!`)
         setOtherUserTyping(true)
+        setLastTypingCheck(now)
       } else {
-        console.log(`⌨️ No one is typing`)
-        setOtherUserTyping(false)
+        // Hanya set false jika sudah lebih dari 5 detik tidak ada typing
+        const timeSinceLastCheck = now - lastTypingCheck
+        if (timeSinceLastCheck > 5000) {
+          setOtherUserTyping(false)
+        }
       }
     } catch (error) {
       console.error('❌ Failed to check typing status:', error)
+      setOtherUserTyping(false)
     }
   }
 
   useEffect(() => {
-    if (!chat) return
+    if (!chat || !currentUserId) {
+      setOtherUserTyping(false)
+      if (typingCheckIntervalRef.current) {
+        clearInterval(typingCheckIntervalRef.current)
+      }
+      return
+    }
     
     console.log(`🔄 Starting typing poll for chat: ${chat.id}`)
-    const interval = setInterval(checkTypingStatus, 2000)
+    
+    // Check immediately
+    checkTypingStatus()
+    
+    // Then check every 1 second for better real-time experience
+    typingCheckIntervalRef.current = setInterval(checkTypingStatus, 1000)
     
     return () => {
       console.log(`🛑 Stopping typing poll for chat: ${chat.id}`)
-      clearInterval(interval)
+      if (typingCheckIntervalRef.current) {
+        clearInterval(typingCheckIntervalRef.current)
+      }
     }
-  }, [chat, currentUserId])
+  }, [chat?.id, currentUserId])
 
   const handleTyping = async (typing) => {
     if (!chat || !currentUserId) return
     
     try {
       console.log(`⌨️ Setting typing status: ${typing} for ${currentUserId} to ${chat.id}`)
-      
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'typing',
-          userId: currentUserId,
-          data: { chatWith: chat.id, isTyping: typing }
-        })
-      })
-      
-      const result = await response.json()
-      console.log(`📤 Typing API result:`, result)
-      
+      await chatAPI.setTyping(currentUserId, chat.id, typing)
     } catch (err) {
       console.error('❌ Failed to set typing status:', err)
     }
@@ -78,47 +92,81 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
     const value = e.target.value
     setMessage(value)
     
-    if (value.length > 0 && !isTyping) {
-      console.log(`⌨️ User started typing`)
-      setIsTyping(true)
-      handleTyping(true)
+    // Clear existing timeout
+    if (typingDebounceRef.current) {
+      clearTimeout(typingDebounceRef.current)
     }
     
-    if (typingTimeout) {
-      clearTimeout(typingTimeout)
-    }
-    
-    const timeout = setTimeout(() => {
-      console.log(`⌨️ User stopped typing (timeout)`)
-      setIsTyping(false)
-      handleTyping(false)
-    }, 3000)
-    
-    setTypingTimeout(timeout)
-  }
-
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (message.trim() && chat) {
-      console.log(`📨 Sending message, stopping typing indicator`)
-      
-      setIsTyping(false)
-      handleTyping(false)
-      if (typingTimeout) {
-        clearTimeout(typingTimeout)
-        setTypingTimeout(null)
+    if (value.length > 0) {
+      // Start typing if not already typing
+      if (!isTyping) {
+        console.log(`⌨️ User started typing`)
+        setIsTyping(true)
+        handleTyping(true)
       }
       
-      onSendMessage(message.trim())
-      setMessage('')
+      // Set timeout to stop typing after 3 seconds
+      typingDebounceRef.current = setTimeout(() => {
+        console.log(`⌨️ User stopped typing (timeout)`)
+        setIsTyping(false)
+        handleTyping(false)
+      }, 3000)
+    } else {
+      // Stop typing immediately if input is empty
+      console.log(`⌨️ User stopped typing (empty input)`)
+      setIsTyping(false)
+      handleTyping(false)
     }
   }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (message.trim() && chat && !sendingMessage) {
+      console.log(`📨 Sending message, stopping typing indicator`)
+      
+      setSendingMessage(true)
+      
+      // Stop typing indicator immediately
+      setIsTyping(false)
+      handleTyping(false)
+      
+      // Clear timeouts
+      if (typingDebounceRef.current) {
+        clearTimeout(typingDebounceRef.current)
+      }
+      
+      try {
+        await onSendMessage(message.trim())
+        setMessage('')
+      } catch (error) {
+        console.error('❌ Failed to send message:', error)
+        alert('Failed to send message. Please try again.')
+      } finally {
+        setSendingMessage(false)
+      }
+    }
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (typingDebounceRef.current) {
+        clearTimeout(typingDebounceRef.current)
+      }
+      if (typingCheckIntervalRef.current) {
+        clearInterval(typingCheckIntervalRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (chat && messages.length > 0) {
-      onMarkAsRead(chat.id)
+      const lastMessage = messages[messages.length - 1]
+      if (lastMessage && lastMessage.from !== currentUserId) {
+        onMarkAsRead(chat.id)
+      }
     }
-  }, [chat, messages, onMarkAsRead])
+  }, [chat, messages, onMarkAsRead, currentUserId])
 
   if (!chat) {
     return (
@@ -143,8 +191,14 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
             <div>
               <h3 className="font-semibold text-gray-800">{chat.name}</h3>
               {otherUserTyping ? (
-                <p className="text-sm text-blue-600 animate-pulse">
-                  ⌨️ sedang mengetik...
+                <p className="text-sm text-blue-600 animate-pulse flex items-center">
+                  <span className="mr-1">⌨️</span>
+                  <span>sedang mengetik...</span>
+                  <div className="flex space-x-1 ml-2">
+                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
+                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                  </div>
                 </p>
               ) : (
                 <p className="text-sm text-green-500">● Online</p>
@@ -158,7 +212,6 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 bg-gradient-to-b from-gray-50 to-white">
-
         {messages.length === 0 ? (
           <div className="text-center text-gray-500 mt-8">
             <div className="text-4xl mb-2">👋</div>
@@ -182,7 +235,7 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
                     }
                   `}
                 >
-                  <p className="text-sm">{msg.message}</p>
+                  <p className="text-sm break-words">{msg.message}</p>
                   <div className="flex justify-between items-center mt-1">
                     <p className="text-xs opacity-70">
                       {new Date(msg.timestamp).toLocaleTimeString('id-ID', {
@@ -202,13 +255,13 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
 
         {otherUserTyping && (
           <div className="mb-4 flex justify-start">
-            <div className="bg-gray-200 text-gray-600 px-4 py-2 rounded-lg max-w-xs">
-              <div className="flex items-center space-x-1">
-                <span className="text-sm">⌨️ {chat.name} sedang mengetik</span>
+            <div className="bg-gray-200 text-gray-600 px-4 py-2 rounded-lg max-w-xs animate-pulse">
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-medium">{chat.name}</span>
                 <div className="flex space-x-1">
-                  <div className="w-1 h-1 bg-gray-500 rounded-full animate-bounce"></div>
-                  <div className="w-1 h-1 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                  <div className="w-1 h-1 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                  <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                  <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
                 </div>
               </div>
             </div>
@@ -219,8 +272,14 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
 
       <form onSubmit={handleSubmit} className="p-4 bg-white border-t border-gray-300">
         {isTyping && (
-          <div className="text-xs text-blue-600 mb-2 animate-pulse">
-            ⌨️ Mengetik...
+          <div className="text-xs text-blue-600 mb-2 animate-pulse flex items-center">
+            <span className="mr-2">⌨️</span>
+            <span>Mengetik...</span>
+            <div className="flex space-x-1 ml-2">
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+              <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+            </div>
           </div>
         )}
         <div className="flex space-x-2">
@@ -229,14 +288,22 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
             value={message}
             onChange={handleInputChange}
             placeholder="Ketik pesan..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white transition-all duration-200"
+            disabled={sendingMessage}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white transition-all duration-200 disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={!message.trim()}
-            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 text-white px-6 py-2 rounded-lg transition duration-200"
+            disabled={!message.trim() || sendingMessage}
+            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 text-white px-6 py-2 rounded-lg transition duration-200 disabled:cursor-not-allowed"
           >
-            Kirim
+            {sendingMessage ? (
+              <span className="flex items-center">
+                <span className="animate-spin mr-2">⏳</span>
+                Kirim
+              </span>
+            ) : (
+              'Kirim'
+            )}
           </button>
         </div>
       </form>

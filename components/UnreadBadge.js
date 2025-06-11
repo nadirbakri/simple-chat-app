@@ -2,9 +2,9 @@ export default function UnreadBadge({ count, size = 'normal' }) {
   if (!count || count === 0) return null
   
   const sizeClasses = {
-    small: 'w-4 h-4 text-xs',
-    normal: 'w-5 h-5 text-xs',
-    large: 'w-6 h-6 text-sm'
+    small: 'min-w-[16px] h-4 text-[10px] px-1',
+    normal: 'min-w-[20px] h-5 text-xs px-1.5',
+    large: 'min-w-[24px] h-6 text-sm px-2'
   }
   
   const displayCount = count > 99 ? '99+' : count.toString()
@@ -17,8 +17,9 @@ export default function UnreadBadge({ count, size = 'normal' }) {
       flex items-center justify-center 
       font-bold 
       animate-pulse
-      border-2 border-white
-      shadow-lg
+      shadow-md
+      ring-2 ring-white
+      z-10
     `}>
       {displayCount}
     </div>
