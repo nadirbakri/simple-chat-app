@@ -62,12 +62,14 @@ export default function Chat() {
         loadChats(userId)
         
         const pollInterval = setInterval(() => {
-        loadChats(userId)
-        if (currentChat) {
-            loadMessages(userId, currentChat.id)
-        }
-        setLastActivity(Date.now())
-        }, 2000)
+            loadChats(currentUserId)
+            
+            if (currentChat) {
+                loadMessages(currentUserId, currentChat.id)
+            }
+
+            setLastActivity(Date.now())
+        }, 3000)
         
         return () => clearInterval(pollInterval)
     }, [isClient, currentChat])

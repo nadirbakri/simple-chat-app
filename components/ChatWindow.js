@@ -42,7 +42,7 @@ export default function ChatWindow({ chat, messages, onSendMessage, onMarkAsRead
     if (!chat) return
     
     console.log(`🔄 Starting typing poll for chat: ${chat.id}`)
-    const interval = setInterval(checkTypingStatus, 800)
+    const interval = setInterval(checkTypingStatus, 2000)
     
     return () => {
       console.log(`🛑 Stopping typing poll for chat: ${chat.id}`)
