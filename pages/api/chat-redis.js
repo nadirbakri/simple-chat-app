@@ -3,7 +3,31 @@ import { Redis } from '@upstash/redis'
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  retry: false,
+  enableAutoPipelining: false,
 })
+
+const log = (msg, data = '') => {
+  const timestamp = new Date().toISOString()
+  console.log(`[${timestamp}] ${msg}`, data)
+}
+
+const testRedisConnection = async () => {
+  try {
+    const testKey = `test:${Date.now()}`
+    await redis.set(testKey, 'ping', { ex: 10 })
+    const result = await redis.get(testKey)
+    if (result === 'ping') {
+      log('✅ Redis connection test successful')
+      await redis.del(testKey)
+    } else {
+      log('❌ Redis connection test failed - unexpected result:', result)
+    }
+  } catch (error) {
+    log('❌ Redis connection test failed:', error.message)
+    throw error
+  }
+}
 
 const getUserKey = (userId) => `user:${userId}`
 const getChatKey = (user1, user2) => `chat:${[user1, user2].sort().join('_')}`
@@ -14,7 +38,8 @@ const getTypingKey = (chatId) => `typing:${chatId}`
 const safeStringify = (obj) => {
   try {
     return typeof obj === 'string' ? obj : JSON.stringify(obj)
-  } catch {
+  } catch (error) {
+    log('❌ Stringify error:', error.message)
     return JSON.stringify({})
   }
 }
@@ -23,15 +48,26 @@ const safeParse = (str) => {
   try {
     if (typeof str === 'object') return str
     return typeof str === 'string' ? JSON.parse(str) : {}
-  } catch {
+  } catch (error) {
+    log('❌ Parse error:', error.message)
     return {}
   }
 }
 
 export default async function handler(req, res) {
+  const requestId = Math.random().toString(36).substr(2, 9)
+  const startTime = Date.now()
+  
   try {
-    const startTime = Date.now()
-    console.log(`📡 Redis API: ${req.method} ${req.url}`)
+    log(`📡 [${requestId}] ${req.method} ${req.url}`)
+    
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+      log('❌ Missing Redis environment variables')
+      return res.status(500).json({ 
+        error: 'Server configuration error - missing Redis credentials',
+        requestId 
+      })
+    }
     
     const { method } = req
     
@@ -42,53 +78,79 @@ export default async function handler(req, res) {
     if (method === 'POST') {
       const { action, userId, data } = req.body || {}
       
-      if (!action || !userId) {
-        return res.status(400).json({ error: 'Missing action or userId' })
+      log(`📨 [${requestId}] Action: ${action}, User: ${userId}`)
+      
+      if (!action) {
+        return res.status(400).json({ error: 'Missing action', requestId })
+      }
+      if (!userId || userId.trim() === '') {
+        return res.status(400).json({ error: 'Missing or empty userId', requestId })
       }
       
       switch (action) {
         case 'register':
           try {
+            log(`🔄 [${requestId}] Testing Redis connection for registration`)
+            await testRedisConnection()
+            
+            log(`🔄 [${requestId}] Registering user: ${userId}`)
             await redis.set(getUserKey(userId), Date.now(), { ex: 3600 })
-            console.log(`✅ User registered: ${userId}`)
-            return res.json({ success: true, message: 'User registered' })
+            
+            log(`✅ [${requestId}] User registered successfully: ${userId}`)
+            return res.json({ 
+              success: true, 
+              message: 'User registered',
+              userId,
+              requestId 
+            })
           } catch (error) {
-            console.error('❌ Register error:', error)
-            return res.status(500).json({ error: 'Registration failed' })
+            log(`❌ [${requestId}] Register error:`, error.message)
+            return res.status(500).json({ 
+              error: 'Registration failed', 
+              details: error.message,
+              requestId 
+            })
           }
           
         case 'search':
           try {
             const { searchId } = data || {}
-            if (!searchId) {
-              return res.status(400).json({ error: 'Missing searchId' })
+            if (!searchId || searchId.trim() === '') {
+              return res.status(400).json({ error: 'Missing or empty searchId', requestId })
             }
             
+            log(`🔍 [${requestId}] Searching for user: ${searchId}`)
             const userExists = await redis.get(getUserKey(searchId))
             const exists = userExists !== null
             
             if (exists && userId !== searchId) {
-              const pipeline = redis.pipeline()
-              pipeline.sadd(`chats:${userId}`, searchId)
-              pipeline.sadd(`chats:${searchId}`, userId)
-              pipeline.expire(`chats:${userId}`, 3600)
-              pipeline.expire(`chats:${searchId}`, 3600)
-              await pipeline.exec()
-              
-              console.log(`✅ Chat relationship created: ${userId} <-> ${searchId}`)
+              log(`🔄 [${requestId}] Creating chat relationship: ${userId} <-> ${searchId}`)
+              await redis.sadd(`chats:${userId}`, searchId)
+              await redis.sadd(`chats:${searchId}`, userId)
+              await redis.expire(`chats:${userId}`, 3600)
+              await redis.expire(`chats:${searchId}`, 3600)
             }
             
-            return res.json({ exists, userId: searchId })
+            log(`✅ [${requestId}] Search complete: ${searchId} exists=${exists}`)
+            return res.json({ exists, userId: searchId, requestId })
           } catch (error) {
-            console.error('❌ Search error:', error)
-            return res.status(500).json({ error: 'Search failed' })
+            log(`❌ [${requestId}] Search error:`, error.message)
+            return res.status(500).json({ 
+              error: 'Search failed', 
+              details: error.message,
+              requestId 
+            })
           }
           
         case 'send':
           try {
             const { from, to, message } = data || {}
             if (!from || !to || !message) {
-              return res.status(400).json({ error: 'Missing from, to, or message' })
+              return res.status(400).json({ 
+                error: 'Missing from, to, or message', 
+                provided: { from: !!from, to: !!to, message: !!message },
+                requestId 
+              })
             }
             
             const chatId = getChatKey(from, to)
@@ -100,42 +162,54 @@ export default async function handler(req, res) {
               timestamp: new Date().toISOString()
             }
             
-            const pipeline = redis.pipeline()
-            pipeline.lpush(getMessagesKey(chatId), safeStringify(messageData))
-            pipeline.expire(getMessagesKey(chatId), 3600)
-            pipeline.sadd(`chats:${from}`, to)
-            pipeline.sadd(`chats:${to}`, from)
-            pipeline.expire(`chats:${from}`, 3600)
-            pipeline.expire(`chats:${to}`, 3600)
-            pipeline.hdel(getTypingKey(chatId), from)
-            await pipeline.exec()
+            log(`📨 [${requestId}] Sending message: ${from} → ${to}`)
+            await redis.lpush(getMessagesKey(chatId), safeStringify(messageData))
+            await redis.expire(getMessagesKey(chatId), 3600)
+            await redis.sadd(`chats:${from}`, to)
+            await redis.sadd(`chats:${to}`, from)
+            await redis.expire(`chats:${from}`, 3600)
+            await redis.expire(`chats:${to}`, 3600)
+            await redis.hdel(getTypingKey(chatId), from)
             
-            console.log(`📨 Message sent: ${from} → ${to}`)
-            return res.json({ success: true, message: messageData })
+            log(`✅ [${requestId}] Message sent successfully`)
+            return res.json({ success: true, message: messageData, requestId })
           } catch (error) {
-            console.error('❌ Send error:', error)
-            return res.status(500).json({ error: 'Failed to send message' })
+            log(`❌ [${requestId}] Send error:`, error.message)
+            return res.status(500).json({ 
+              error: 'Failed to send message', 
+              details: error.message,
+              requestId 
+            })
           }
           
         case 'mark_read':
           try {
             const { chatWith } = data || {}
             if (!chatWith) {
-              return res.status(400).json({ error: 'Missing chatWith' })
+              return res.status(400).json({ error: 'Missing chatWith', requestId })
             }
             
             await redis.set(getLastSeenKey(userId, chatWith), Date.now(), { ex: 3600 })
-            return res.json({ success: true, message: 'Marked as read' })
+            log(`👁️ [${requestId}] Marked as read: ${userId} → ${chatWith}`)
+            return res.json({ success: true, message: 'Marked as read', requestId })
           } catch (error) {
-            console.error('❌ Mark read error:', error)
-            return res.status(500).json({ error: 'Failed to mark as read' })
+            log(`❌ [${requestId}] Mark read error:`, error.message)
+            return res.status(500).json({ 
+              error: 'Failed to mark as read', 
+              details: error.message,
+              requestId 
+            })
           }
           
         case 'typing':
           try {
             const { chatWith, isTyping } = data || {}
             if (!chatWith || typeof isTyping !== 'boolean') {
-              return res.status(400).json({ error: 'Missing chatWith or isTyping' })
+              return res.status(400).json({ 
+                error: 'Missing chatWith or invalid isTyping', 
+                provided: { chatWith: !!chatWith, isTyping: typeof isTyping },
+                requestId 
+              })
             }
             
             const chatId = getChatKey(userId, chatWith)
@@ -148,21 +222,36 @@ export default async function handler(req, res) {
               await redis.hdel(typingKey, userId)
             }
             
-            return res.json({ success: true, message: 'Typing status updated' })
+            log(`⌨️ [${requestId}] Typing: ${userId} ${isTyping ? 'started' : 'stopped'}`)
+            return res.json({ success: true, message: 'Typing status updated', requestId })
           } catch (error) {
-            console.error('❌ Typing error:', error)
-            return res.status(500).json({ error: 'Failed to update typing status' })
+            log(`❌ [${requestId}] Typing error:`, error.message)
+            return res.status(500).json({ 
+              error: 'Failed to update typing status', 
+              details: error.message,
+              requestId 
+            })
           }
           
         default:
-          return res.status(400).json({ error: `Invalid action: ${action}` })
+          return res.status(400).json({ error: `Invalid action: ${action}`, requestId })
       }
     }
     
     if (method === 'GET') {
       const { userId, chatWith, getTyping } = req.query || {}
       
-      if (getTyping && userId && chatWith) {
+      log(`📥 [${requestId}] GET params:`, { userId, chatWith, getTyping })
+      
+      if (!userId || userId.trim() === '') {
+        return res.status(400).json({ 
+          error: 'Missing or empty userId parameter',
+          received: { userId, chatWith, getTyping },
+          requestId 
+        })
+      }
+      
+      if (getTyping && chatWith) {
         try {
           const chatId = getChatKey(userId, chatWith)
           const typingData = await redis.hgetall(getTypingKey(chatId)) || {}
@@ -177,21 +266,28 @@ export default async function handler(req, res) {
             .map(([user, _]) => user)
           
           const elapsed = Date.now() - startTime
-          console.log(`⌨️ Typing check for ${userId}: ${elapsed}ms`)
+          log(`⌨️ [${requestId}] Typing check: ${activeTypers.length} active (${elapsed}ms)`)
           
           return res.json({ 
             isTyping: activeTypers.length > 0,
-            typingUsers: activeTypers 
+            typingUsers: activeTypers,
+            requestId 
           })
         } catch (error) {
-          console.error('❌ Get typing error:', error)
-          return res.status(500).json({ error: 'Failed to get typing status' })
+          log(`❌ [${requestId}] Typing check error:`, error.message)
+          return res.status(500).json({ 
+            error: 'Failed to get typing status', 
+            details: error.message,
+            requestId 
+          })
         }
       }
       
-      if (userId && chatWith) {
+      if (chatWith) {
         try {
           const chatId = getChatKey(userId, chatWith)
+          log(`📥 [${requestId}] Getting messages for: ${chatId}`)
+          
           const messagesData = await redis.lrange(getMessagesKey(chatId), 0, -1) || []
           
           const messages = messagesData
@@ -200,118 +296,130 @@ export default async function handler(req, res) {
             .filter(msg => msg && msg.id)
           
           const elapsed = Date.now() - startTime
-          console.log(`📥 Messages for ${chatId}: ${messages.length} messages in ${elapsed}ms`)
+          log(`✅ [${requestId}] Messages loaded: ${messages.length} (${elapsed}ms)`)
           
-          return res.json({ messages })
+          return res.json({ messages, requestId })
         } catch (error) {
-          console.error('❌ Get messages error:', error)
-          return res.status(500).json({ error: 'Failed to get messages' })
+          log(`❌ [${requestId}] Get messages error:`, error.message)
+          return res.status(500).json({ 
+            error: 'Failed to get messages', 
+            details: error.message,
+            requestId 
+          })
         }
       }
       
-      if (userId) {
-        try {
-          const fetchStart = Date.now()
-          const chatUserIds = await redis.smembers(`chats:${userId}`) || []
-          
-          if (chatUserIds.length === 0) {
-            const elapsed = Date.now() - startTime
-            console.log(`📋 No chats for ${userId}: ${elapsed}ms`)
-            return res.json({ chats: [] })
-          }
-          
-          console.log(`📋 Found ${chatUserIds.length} chats for ${userId}`)
-          
-          const chatPromises = chatUserIds.map(async (chatUserId) => {
-            try {
-              const chatId = getChatKey(userId, chatUserId)
-              
-              const [latestMessages, lastSeenTime] = await Promise.race([
-                Promise.all([
-                  redis.lrange(getMessagesKey(chatId), 0, 0),
-                  redis.get(getLastSeenKey(userId, chatUserId))
-                ]),
-                new Promise((_, reject) => 
-                  setTimeout(() => reject(new Error('Individual chat timeout')), 5000)
-                )
-              ])
-              
-              let lastMessage = ''
-              let lastMessageTime = null
-              let unreadCount = 0
-              
-              if (latestMessages[0] && latestMessages[0].length > 0) {
-                const messageObj = safeParse(latestMessages[0][0])
-                if (messageObj && messageObj.message) {
-                  lastMessage = messageObj.message
-                  lastMessageTime = messageObj.timestamp
-                  
-                  const lastSeen = parseInt(lastSeenTime || 0)
-                  const messageTime = new Date(messageObj.timestamp).getTime()
-                  
-                  if (messageObj.from !== userId && messageTime > lastSeen) {
-                    unreadCount = 1
-                  }
+      try {
+        log(`📋 [${requestId}] Getting chats for: ${userId}`)
+        const chatUserIds = await redis.smembers(`chats:${userId}`) || []
+        
+        if (chatUserIds.length === 0) {
+          const elapsed = Date.now() - startTime
+          log(`📋 [${requestId}] No chats found (${elapsed}ms)`)
+          return res.json({ chats: [], requestId })
+        }
+        
+        log(`📋 [${requestId}] Processing ${chatUserIds.length} chats`)
+        
+        const chatPromises = chatUserIds.map(async (chatUserId, index) => {
+          try {
+            log(`📋 [${requestId}] Processing chat ${index + 1}/${chatUserIds.length}: ${chatUserId}`)
+            
+            const chatId = getChatKey(userId, chatUserId)
+            
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Chat timeout')), 8000)
+            )
+            
+            const [latestMessages, lastSeenTime] = await Promise.race([
+              Promise.all([
+                redis.lrange(getMessagesKey(chatId), 0, 0),
+                redis.get(getLastSeenKey(userId, chatUserId))
+              ]),
+              timeoutPromise
+            ])
+            
+            let lastMessage = ''
+            let lastMessageTime = null
+            let unreadCount = 0
+            
+            if (latestMessages && latestMessages.length > 0 && latestMessages[0].length > 0) {
+              const messageObj = safeParse(latestMessages[0])
+              if (messageObj && messageObj.message) {
+                lastMessage = messageObj.message
+                lastMessageTime = messageObj.timestamp
+                
+                const lastSeen = parseInt(lastSeenTime || 0)
+                const messageTime = new Date(messageObj.timestamp).getTime()
+                
+                if (messageObj.from !== userId && messageTime > lastSeen) {
+                  unreadCount = 1
                 }
               }
-              
-              return {
-                id: chatUserId,
-                name: chatUserId,
-                lastMessage,
-                lastMessageTime,
-                unreadCount,
-                hasUnread: unreadCount > 0
-              }
-            } catch (error) {
-              console.error(`❌ Error processing ${chatUserId}:`, error.message)
-              return {
-                id: chatUserId,
-                name: chatUserId,
-                lastMessage: '',
-                lastMessageTime: null,
-                unreadCount: 0,
-                hasUnread: false
-              }
-            }
-          })
-          
-          const results = await Promise.allSettled(chatPromises)
-          const chatList = results
-            .filter(result => result.status === 'fulfilled')
-            .map(result => result.value)
-          
-          chatList.sort((a, b) => {
-            if (a.hasUnread && !b.hasUnread) return -1
-            if (!a.hasUnread && b.hasUnread) return 1
-            
-            if (a.lastMessageTime && b.lastMessageTime) {
-              return new Date(b.lastMessageTime) - new Date(a.lastMessageTime)
             }
             
-            return 0
-          })
+            log(`✅ [${requestId}] Chat ${index + 1} processed: ${chatUserId}`)
+            
+            return {
+              id: chatUserId,
+              name: chatUserId,
+              lastMessage,
+              lastMessageTime,
+              unreadCount,
+              hasUnread: unreadCount > 0
+            }
+          } catch (error) {
+            log(`❌ [${requestId}] Chat ${index + 1} error (${chatUserId}):`, error.message)
+            return {
+              id: chatUserId,
+              name: chatUserId,
+              lastMessage: '',
+              lastMessageTime: null,
+              unreadCount: 0,
+              hasUnread: false
+            }
+          }
+        })
+        
+        const results = await Promise.allSettled(chatPromises)
+        const chatList = results
+          .filter(result => result.status === 'fulfilled')
+          .map(result => result.value)
+        
+        chatList.sort((a, b) => {
+          if (a.hasUnread && !b.hasUnread) return -1
+          if (!a.hasUnread && b.hasUnread) return 1
           
-          const elapsed = Date.now() - startTime
-          console.log(`📋 Chats for ${userId}: ${chatList.length} chats in ${elapsed}ms`)
+          if (a.lastMessageTime && b.lastMessageTime) {
+            return new Date(b.lastMessageTime) - new Date(a.lastMessageTime)
+          }
           
-          return res.json({ chats: chatList })
-        } catch (error) {
-          console.error('❌ Get chats error:', error)
-          return res.status(500).json({ error: 'Failed to get chats' })
-        }
+          return 0
+        })
+        
+        const elapsed = Date.now() - startTime
+        log(`✅ [${requestId}] Chats loaded: ${chatList.length} (${elapsed}ms)`)
+        
+        return res.json({ chats: chatList, requestId })
+      } catch (error) {
+        log(`❌ [${requestId}] Get chats error:`, error.message)
+        return res.status(500).json({ 
+          error: 'Failed to get chats', 
+          details: error.message,
+          requestId 
+        })
       }
-      
-      return res.status(400).json({ error: 'Missing parameters' })
     }
     
-    res.status(405).json({ error: `Method ${method} not allowed` })
+    res.status(405).json({ error: `Method ${method} not allowed`, requestId })
     
   } catch (error) {
-    console.error('❌ Critical error:', error)
+    const elapsed = Date.now() - startTime
+    log(`❌ [${requestId}] Critical error (${elapsed}ms):`, error.message)
     res.status(500).json({ 
       error: 'Internal server error', 
       details: error.message,
+      requestId,
       timestamp: new Date().toISOString()
     })
   }
