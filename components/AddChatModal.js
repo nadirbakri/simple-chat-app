@@ -64,7 +64,7 @@ export default function AddChatModal({ isOpen, onClose, onAddChat }) {
               value={searchId}
               onChange={(e) => setSearchId(e.target.value)}
               className="w-full px-3 py-2.5 md:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white transition-all duration-200 text-sm md:text-base"
-              placeholder="Contoh: jane456"
+              placeholder="Contoh: Bakri Nadir"
               required
               disabled={loading}
               autoFocus
