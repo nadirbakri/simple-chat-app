@@ -24,10 +24,10 @@ export default function Home() {
     <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-md">
         <h1 className="text-3xl font-bold text-gray-800 mb-4 text-center">
-          💬 Enhanced Chat
+          💬 Simple Chat
         </h1>
         <p className="text-center text-gray-600 mb-6 text-sm">
-          Real-time chat dengan <span className="font-semibold text-blue-600">Unread Messages</span> & <span className="font-semibold text-purple-600">Highlights</span>
+          Real-time chat
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -50,12 +50,6 @@ export default function Home() {
             Masuk Chat
           </button>
         </form>
-        <div className="mt-6 text-xs text-gray-500 space-y-1">
-          <p className="text-center">✨ <strong>Fitur Baru:</strong></p>
-          <p>🔴 Unread message count</p>
-          <p>🔥 Highlight untuk chat baru</p>
-          <p>⏰ Auto-delete setelah 1 jam</p>
-        </div>
       </div>
     </div>
   )

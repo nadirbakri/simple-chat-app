@@ -15,16 +15,46 @@ export default function Chat() {
     const [lastActivity, setLastActivity] = useState(0)
     const [isClient, setIsClient] = useState(false)
     const [connectionRetries, setConnectionRetries] = useState(0)
+    const [isMobile, setIsMobile] = useState(false)
+    const [showChatList, setShowChatList] = useState(true)
     const router = useRouter()
     const pollIntervalRef = useRef(null)
+    const messagesPollRef = useRef(null)
     const maxRetries = 3
+
+    useEffect(() => {
+        const checkMobile = () => {
+            const isMobileScreen = window.innerWidth < 768
+            setIsMobile(isMobileScreen)
+            
+            if (isMobileScreen && !currentChat) {
+                setShowChatList(true)
+            }
+        }
+        
+        checkMobile()
+        window.addEventListener('resize', checkMobile)
+        
+        return () => window.removeEventListener('resize', checkMobile)
+    }, [currentChat])
+
+    useEffect(() => {
+        if (isMobile) {
+            if (currentChat) {
+                setShowChatList(false)
+            } else {
+                setShowChatList(true)
+            }
+        } else {
+            setShowChatList(true)
+        }
+    }, [isMobile, currentChat])
 
     const handleMarkAsRead = useCallback(async (chatWith) => {
         if (!currentUserId || !chatWith) return
         
         try {
             await chatAPI.markAsRead(currentUserId, chatWith)
-            console.log(`👁️ Marked ${chatWith} as read`)
             
             setChats(prevChats => 
                 prevChats.map(chat => 
@@ -34,7 +64,7 @@ export default function Chat() {
                 )
             )
         } catch (err) {
-            console.error('❌ Failed to mark as read:', err)
+            
         }
     }, [currentUserId])
 
@@ -54,18 +84,15 @@ export default function Chat() {
 
         setCurrentUserId(userId)
         
-        // Register user with better error handling
         const registerUser = async () => {
             try {
-                const result = await chatAPI.register(userId)
-                console.log('✅ User registered:', result)
+                await chatAPI.register(userId)
                 setIsOnline(true)
                 setConnectionRetries(0)
             } catch (err) {
-                console.error('❌ Registration failed:', err)
                 if (connectionRetries < maxRetries) {
                     setConnectionRetries(prev => prev + 1)
-                    setTimeout(registerUser, 2000) // Retry after 2 seconds
+                    setTimeout(registerUser, 2000)
                 } else {
                     setIsOnline(false)
                 }
@@ -79,18 +106,12 @@ export default function Chat() {
     useEffect(() => {
         if (!currentUserId) return
 
-        // Setup polling interval
         if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current)
         }
 
         pollIntervalRef.current = setInterval(() => {
             loadChats(currentUserId)
-            
-            if (currentChat) {
-                loadMessages(currentUserId, currentChat.id)
-            }
-
             setLastActivity(Date.now())
         }, 3000)
         
@@ -99,7 +120,28 @@ export default function Chat() {
                 clearInterval(pollIntervalRef.current)
             }
         }
-    }, [currentUserId, currentChat])
+    }, [currentUserId])
+
+    useEffect(() => {
+        if (!currentUserId || !currentChat) {
+            if (messagesPollRef.current) {
+                clearInterval(messagesPollRef.current)
+            }
+            return
+        }
+
+        loadMessages(currentUserId, currentChat.id)
+
+        messagesPollRef.current = setInterval(() => {
+            loadMessages(currentUserId, currentChat.id)
+        }, 1000)
+        
+        return () => {
+            if (messagesPollRef.current) {
+                clearInterval(messagesPollRef.current)
+            }
+        }
+    }, [currentUserId, currentChat?.id])
 
     const loadChats = async (userId) => {
         if (!userId) return
@@ -110,7 +152,6 @@ export default function Chat() {
             setChats(prevChats => {
                 const newChats = result.chats || []
                 
-                // Keep the same array reference if no changes to prevent re-renders
                 if (prevChats.length === newChats.length && 
                     JSON.stringify(prevChats.map(c => ({ id: c.id, unreadCount: c.unreadCount }))) === 
                     JSON.stringify(newChats.map(c => ({ id: c.id, unreadCount: c.unreadCount })))) {
@@ -123,8 +164,6 @@ export default function Chat() {
             setIsOnline(true)
             setConnectionRetries(0)
         } catch (err) {
-            console.error('❌ Failed to load chats:', err)
-            // Only set offline after multiple retries
             if (connectionRetries >= maxRetries) {
                 setIsOnline(false)
             } else {
@@ -142,7 +181,8 @@ export default function Chat() {
             
             setMessages(prev => {
                 const existingMessages = prev[chatWith] || []
-                if (JSON.stringify(existingMessages) !== JSON.stringify(newMessages)) {
+                
+                if (JSON.stringify(existingMessages.map(m => m.id)) !== JSON.stringify(newMessages.map(m => m.id))) {
                     return {
                         ...prev,
                         [chatWith]: newMessages
@@ -154,14 +194,11 @@ export default function Chat() {
             setIsOnline(true)
             setConnectionRetries(0)
         } catch (err) {
-            console.error('❌ Failed to load messages:', err)
-            // Don't immediately set offline for message loading failures
+            
         }
     }
 
     const handleAddChat = async (searchId) => {
-        console.log('🔍 Searching for user:', searchId)
-        
         if (searchId === currentUserId) {
             throw new Error('Tidak bisa chat dengan diri sendiri!')
         }
@@ -174,8 +211,6 @@ export default function Chat() {
         const result = await chatAPI.searchUser(currentUserId, searchId)
         
         if (result.exists) {
-            console.log('✅ User found, chat relationship created on server!')
-            
             const newChat = {
                 id: searchId,
                 name: searchId,
@@ -188,8 +223,6 @@ export default function Chat() {
             setChats(prev => [...prev, newChat])
             
             setTimeout(() => loadChats(currentUserId), 500)
-            
-            console.log('✅ Chat berhasil ditambahkan!')
         } else {
             throw new Error('User tidak ditemukan atau sedang offline!')
         }
@@ -200,28 +233,19 @@ export default function Chat() {
 
         try {
             const result = await chatAPI.sendMessage(currentUserId, currentChat.id, message)
-            console.log('📨 Message sent:', result)
             
             const messageData = result.message
-            setMessages(prev => ({
-                ...prev,
-                [currentChat.id]: [...(prev[currentChat.id] || []), messageData]
-            }))
-            
             setChats(prev => prev.map(chat => 
                 chat.id === currentChat.id 
                     ? { ...chat, lastMessage: message, lastMessageTime: messageData.timestamp }
                     : chat
             ))
             
-            // Refresh data shortly after sending
             setTimeout(() => {
                 loadMessages(currentUserId, currentChat.id)
-                loadChats(currentUserId)
-            }, 500)
+            }, 200)
         } catch (err) {
-            console.error('❌ Failed to send message:', err)
-            throw err // Re-throw to show error in UI
+            throw err
         }
     }
 
@@ -229,16 +253,24 @@ export default function Chat() {
         if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current)
         }
+        if (messagesPollRef.current) {
+            clearInterval(messagesPollRef.current)
+        }
         localStorage.removeItem('chatUserId')
         router.push('/')
     }
 
     const handleChatSelect = (chat) => {
         setCurrentChat(chat)
-        loadMessages(currentUserId, chat.id)
         
         if (chat.hasUnread) {
             handleMarkAsRead(chat.id)
+        }
+    }
+
+    const handleBackToList = () => {
+        if (isMobile) {
+            setCurrentChat(null)
         }
     }
 
@@ -258,65 +290,75 @@ export default function Chat() {
     }
 
     return (
-        <div className="h-screen flex flex-col">
-            <div className="bg-gradient-to-r from-blue-600 to-purple-700 text-white p-4 flex justify-between items-center shadow-lg">
-                <div className="flex items-center space-x-4">
-                    <div>
-                        <h1 className="text-xl font-bold flex items-center">
-                            💬 Enhanced Chat
-                            {getTotalUnreadCount() > 0 && (
-                                <span className="ml-2 bg-red-500 text-white px-2 py-1 rounded-full text-xs animate-pulse">
-                                    {getTotalUnreadCount()} unread
-                                </span>
-                            )}
-                        </h1>
-                        <p className="text-sm opacity-90 flex items-center">
-                            Hai, <span className="font-semibold mx-1">{currentUserId}</span>!
-                            {isOnline ? (
-                                <span className="text-green-300 ml-2 flex items-center">
-                                    <span className="w-2 h-2 bg-green-400 rounded-full mr-1 animate-pulse"></span>
-                                    Online
-                                </span>
-                            ) : (
-                                <span className="text-red-300 ml-2 flex items-center">
-                                    <span className="w-2 h-2 bg-red-400 rounded-full mr-1"></span>
-                                    Offline (Retrying...)
-                                </span>
-                            )}
-                        </p>
-                    </div>
-                </div>
-                
-                <div className="flex items-center space-x-3">
-                    {lastActivity > 0 && (
-                        <div className="text-xs opacity-75">
-                            Last update: {new Date(lastActivity).toLocaleTimeString('id-ID')}
+        <div className="h-screen flex flex-col bg-gray-100">
+            <div className="bg-gradient-to-r from-blue-600 to-purple-700 text-white shadow-lg flex-shrink-0">
+                <div className="p-3 md:p-4 flex justify-between items-center">
+                    <div className="flex items-center space-x-2 md:space-x-4 min-w-0 flex-1">
+                        <div className="min-w-0 flex-1">
+                            <h1 className="text-base md:text-xl font-bold flex items-center">
+                                💬 Enhanced Chat
+                                {getTotalUnreadCount() > 0 && (
+                                    <span className="ml-2 bg-red-500 text-white px-2 py-1 rounded-full text-xs animate-pulse">
+                                        {getTotalUnreadCount()} unread
+                                    </span>
+                                )}
+                            </h1>
+                            <p className="text-xs md:text-sm opacity-90 flex items-center">
+                                Hai, <span className="font-semibold mx-1">{currentUserId}</span>!
+                                {isOnline ? (
+                                    <span className="text-green-300 ml-2 flex items-center">
+                                        <span className="w-2 h-2 bg-green-400 rounded-full mr-1 animate-pulse"></span>
+                                        Online
+                                    </span>
+                                ) : (
+                                    <span className="text-red-300 ml-2 flex items-center">
+                                        <span className="w-2 h-2 bg-red-400 rounded-full mr-1"></span>
+                                        Offline
+                                    </span>
+                                )}
+                            </p>
                         </div>
-                    )}
-                    <button
-                        onClick={handleLogout}
-                        className="bg-white bg-opacity-20 hover:bg-opacity-30 px-4 py-2 rounded-lg text-sm transition duration-200 backdrop-blur-sm text-gray-800"
-                    >
-                        Logout
-                    </button>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2 md:space-x-3 flex-shrink-0">
+                        {lastActivity > 0 && (
+                            <div className="text-xs opacity-75 hidden lg:block">
+                                Last: {new Date(lastActivity).toLocaleTimeString('id-ID')}
+                            </div>
+                        )}
+                        <button
+                            onClick={handleLogout}
+                            className="bg-white/20 hover:bg-white/30 text-white px-3 md:px-4 py-1.5 md:py-2 rounded-lg text-xs md:text-sm transition duration-200 backdrop-blur-sm border border-white/20 font-medium shadow-sm"
+                        >
+                            Logout
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <div className="flex-1 flex">
-                <ChatList
-                    chats={chats}
-                    currentChat={currentChat}
-                    onChatSelect={handleChatSelect}
-                    onAddChat={() => setShowAddModal(true)}
-                />
+            <div className="flex-1 flex overflow-hidden min-h-0">
+                <div className={`${showChatList ? 'flex' : 'hidden md:flex'} w-full md:w-80 flex-col bg-white border-r border-gray-300 h-full`}>
+                    <ChatList
+                        chats={chats}
+                        currentChat={currentChat}
+                        onChatSelect={handleChatSelect}
+                        onAddChat={() => setShowAddModal(true)}
+                        isHidden={false}
+                    />
+                </div>
                 
-                <ChatWindow
-                    chat={currentChat}
-                    messages={messages[currentChat?.id] || []}
-                    onSendMessage={handleSendMessage}
-                    onMarkAsRead={handleMarkAsRead}
-                    currentUserId={currentUserId}
-                />
+                {(currentChat || !isMobile) && (
+                    <div className="flex-1 flex">
+                        <ChatWindow
+                            chat={currentChat}
+                            messages={messages[currentChat?.id] || []}
+                            onSendMessage={handleSendMessage}
+                            onMarkAsRead={handleMarkAsRead}
+                            currentUserId={currentUserId}
+                            onBackToList={handleBackToList}
+                        />
+                    </div>
+                )}
             </div>
 
             <AddChatModal

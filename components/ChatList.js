@@ -1,117 +1,120 @@
-import { useState, useEffect } from 'react'
 import UnreadBadge from './UnreadBadge'
 
-export default function ChatList({ chats, currentChat, onChatSelect, onAddChat }) {
-  const [isClient, setIsClient] = useState(false)
-
-  useEffect(() => {
-    setIsClient(true)
-  }, [])
-
-  const getTotalUnreadCount = () => {
-    return chats.reduce((total, chat) => total + (chat.unreadCount || 0), 0)
-  }
-
-  const formatLastMessageTime = (timestamp) => {
-    if (!timestamp || !isClient) return ''
-    
-    const now = new Date()
-    const messageTime = new Date(timestamp)
-    const diffInHours = (now - messageTime) / (1000 * 60 * 60)
-    
-    if (diffInHours < 1) {
-      const diffInMinutes = Math.floor((now - messageTime) / (1000 * 60))
-      return diffInMinutes < 1 ? 'Baru saja' : `${diffInMinutes}m`
-    } else if (diffInHours < 24) {
-      return `${Math.floor(diffInHours)}h`
-    } else {
-      return messageTime.toLocaleDateString('id-ID')
-    }
-  }
+export default function ChatList({ chats, currentChat, onChatSelect, onAddChat, isHidden }) {
+  const totalUnread = chats.reduce((total, chat) => total + (chat.unreadCount || 0), 0)
 
   return (
-    <div className="w-1/3 bg-gray-100 border-r border-gray-300 flex flex-col">
-      <div className="p-4 bg-white border-b border-gray-300">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <h2 className="text-lg font-semibold text-gray-800">Chats</h2>
-            {getTotalUnreadCount() > 0 && (
-              <UnreadBadge count={getTotalUnreadCount()} size="normal" />
+    <div className={`
+      ${isHidden ? 'hidden md:flex' : 'flex md:flex'} 
+      w-full md:w-80 flex-col bg-white border-r border-gray-300 h-full
+    `}>
+      <div className="p-3 md:p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100 flex-shrink-0">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base md:text-lg font-semibold text-gray-800 flex items-center">
+            💬 Chats
+            {totalUnread > 0 && (
+              <UnreadBadge count={totalUnread} size="small" />
             )}
-          </div>
+          </h2>
           <button
             onClick={onAddChat}
-            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white px-3 py-1 rounded-lg text-sm transition duration-200 transform hover:scale-105"
+            className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white p-2 rounded-lg transition duration-200 shadow-sm"
+            title="Tambah Chat Baru"
           >
-            + Tambah
+            <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
           </button>
         </div>
       </div>
-      
-      <div className="overflow-y-auto flex-1">
+
+      <div className="flex-1 overflow-y-auto">
         {chats.length === 0 ? (
-          <div className="p-4 text-center text-gray-500">
-            <div className="text-4xl mb-2">💬</div>
-            <p>Belum ada chat.</p>
-            <p className="text-sm">Klik &quot;Tambah&quot; untuk memulai.</p>
+          <div className="p-6 text-center text-gray-500">
+            <div className="text-4xl mb-3">👥</div>
+            <p className="text-sm font-medium">Belum ada chat</p>
+            <p className="text-xs mt-1">Tap + untuk menambah chat baru</p>
           </div>
         ) : (
-          chats.map((chat) => (
-            <div
-              key={chat.id}
-              onClick={() => onChatSelect(chat)}
-              className={`
-                p-4 border-b cursor-pointer transition-all duration-200
-                ${currentChat?.id === chat.id 
-                  ? 'bg-blue-50 border-l-4 border-l-blue-500' 
-                  : chat.hasUnread 
-                    ? 'bg-yellow-50 hover:bg-yellow-100 border-yellow-200 animate-pulse' 
-                    : 'hover:bg-gray-50 border-gray-200'
-                }
-              `}
-            >
-              <div className="flex items-center">
-                <div className={`
-                  w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold mr-3 transition-all duration-300
-                  ${chat.hasUnread 
-                    ? 'bg-gradient-to-r from-red-500 to-pink-500 shadow-lg transform scale-110' 
-                    : 'bg-gradient-to-r from-blue-500 to-purple-600'
-                  }
-                `}>
-                  {chat.name.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-start">
-                    <h3 className={`
-                      font-medium truncate pr-2
-                      ${chat.hasUnread ? 'text-gray-900 font-bold' : 'text-gray-800'}
+          chats.map((chat) => {
+            const isActive = currentChat?.id === chat.id
+            const hasUnread = chat.unreadCount > 0
+            
+            return (
+              <div
+                key={chat.id}
+                onClick={() => onChatSelect(chat)}
+                className={`
+                  p-3 md:p-4 border-b border-gray-100 cursor-pointer transition-all duration-200 relative
+                  hover:bg-gray-50 active:bg-gray-100
+                  ${isActive ? 'bg-gradient-to-r from-blue-50 to-purple-50 border-l-4 border-l-blue-500' : ''}
+                  ${hasUnread ? 'bg-yellow-50' : ''}
+                `}
+              >
+                <div className="flex items-center">
+                  <div className="relative mr-3 flex-shrink-0">
+                    <div className={`
+                      w-8 h-8 md:w-12 md:h-12 rounded-full flex items-center justify-center text-white font-semibold text-xs md:text-base
+                      ${isActive 
+                        ? 'bg-gradient-to-r from-blue-600 to-purple-700 ring-2 ring-blue-300' 
+                        : 'bg-gradient-to-r from-gray-400 to-gray-600'
+                      }
+                      ${hasUnread ? 'ring-2 ring-yellow-400 animate-pulse' : ''}
                     `}>
-                      {chat.name}
-                    </h3>
-                    <div className="flex items-center space-x-1 flex-shrink-0">
-                      {chat.lastMessageTime && isClient && (
-                        <span className={`text-xs ${chat.hasUnread ? 'text-yellow-700 font-semibold' : 'text-gray-500'}`}>
-                          {formatLastMessageTime(chat.lastMessageTime)}
+                      {chat.name.charAt(0).toUpperCase()}
+                    </div>
+                    {hasUnread && (
+                      <div className="absolute -top-1 -right-1">
+                        <UnreadBadge count={chat.unreadCount} size="small" />
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className={`
+                        text-sm md:text-base font-medium truncate
+                        ${isActive ? 'text-blue-700' : 'text-gray-800'}
+                        ${hasUnread ? 'font-bold' : ''}
+                      `}>
+                        {chat.name}
+                      </h3>
+                      {chat.lastMessageTime && (
+                        <span className="text-xs text-gray-500 ml-2 flex-shrink-0">
+                          {new Date(chat.lastMessageTime).toLocaleTimeString('id-ID', {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
                         </span>
                       )}
-                      {chat.hasUnread && chat.unreadCount > 0 && (
-                        <UnreadBadge count={chat.unreadCount} size="small" />
-                      )}
                     </div>
+                    
+                    {chat.lastMessage && (
+                      <p className={`
+                        text-xs md:text-sm text-gray-600 truncate
+                        ${hasUnread ? 'font-semibold text-gray-800' : ''}
+                      `}>
+                        {chat.lastMessage}
+                      </p>
+                    )}
+                    
+                    {hasUnread && (
+                      <div className="flex items-center mt-1">
+                        <div className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></div>
+                        <span className="text-xs text-red-600 font-medium">
+                          {chat.unreadCount} pesan belum dibaca
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <p className={`
-                    text-sm truncate mt-1
-                    ${chat.hasUnread 
-                      ? 'text-gray-700 font-semibold' 
-                      : 'text-gray-500'
-                    }
-                  `}>
-                    {chat.lastMessage || 'Belum ada pesan'}
-                  </p>
                 </div>
+                
+                {isActive && (
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-blue-500 to-purple-600 rounded-r-full"></div>
+                )}
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </div>
