@@ -39,7 +39,7 @@ export default function Home() {
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              placeholder="Contoh: john123"
+              placeholder="Contoh: Nadir Bakri"
               required
             />
           </div>
