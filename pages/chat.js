@@ -283,7 +283,7 @@ export default function Chat() {
             <div className="h-screen flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600">
                 <div className="text-white text-center">
                     <div className="text-4xl mb-4">💬</div>
-                    <p className="text-lg">Loading Enhanced Chat...</p>
+                    <p className="text-lg">Loading Simple Chat...</p>
                 </div>
             </div>
         )
@@ -296,7 +296,7 @@ export default function Chat() {
                     <div className="flex items-center space-x-2 md:space-x-4 min-w-0 flex-1">
                         <div className="min-w-0 flex-1">
                             <h1 className="text-base md:text-xl font-bold flex items-center">
-                                💬 Enhanced Chat
+                                💬 Simple Chat
                                 {getTotalUnreadCount() > 0 && (
                                     <span className="ml-2 bg-red-500 text-white px-2 py-1 rounded-full text-xs animate-pulse">
                                         {getTotalUnreadCount()} unread
